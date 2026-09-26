@@ -1,0 +1,11 @@
+# Secrets: the .session file is a logged-in Telegram session, treat it like a password
+.env
+*.session
+*.session-journal
+
+# Downloaded papers and generated indexes
+data/
+
+.venv/
+__pycache__/
+*.egg-info/

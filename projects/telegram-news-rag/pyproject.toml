@@ -1,0 +1,32 @@
+[project]
+name = "newsrag"
+version = "0.1.0"
+description = "RAG over daily newspapers and magazines posted to a Telegram channel"
+requires-python = ">=3.11"
+dependencies = [
+    # Step 1: ingestion
+    "telethon>=1.36",
+    "cryptg>=0.4",            # native crypto, makes Telethon downloads much faster
+    "pydantic-settings>=2.4",
+    # Step 2: parsing
+    "pymupdf>=1.24",
+    "docling>=2.60",
+    "ocrmac>=1.0; sys_platform == 'darwin'",  # Apple Vision OCR
+    # Step 3: basic RAG
+    "langchain>=1.0",
+    "anthropic>=1.8",
+    "langchain-ollama>=1.0",
+    "langchain-huggingface>=1.0",
+    "langchain-qdrant>=1.0",
+    "qdrant-client>=1.12",
+    "sentence-transformers>=3.0",
+    "rich>=13.0",
+    "streamlit>=1.40",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,7 @@
+[server]
+# Skip the first-run email prompt (it blocks startup until you press Enter).
+# Headless also means the browser doesn't open by itself: open http://localhost:8501
+headless = true
+
+[browser]
+gatherUsageStats = false
