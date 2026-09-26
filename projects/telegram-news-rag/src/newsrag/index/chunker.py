@@ -6,6 +6,7 @@ headings above it, so "Xi Pushes All-Out Drive..." travels with its paragraphs.
 """
 
 import json
+import re
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -21,6 +22,25 @@ from newsrag.config import get_settings
 MIN_WORDS = 40
 # Market data tables, TV listings, etc. are not what we ask questions about
 SKIP_LABELS = {DocItemLabel.TABLE, DocItemLabel.PAGE_HEADER, DocItemLabel.PAGE_FOOTER}
+
+# Prose runs roughly 30-40% function words ("the", "of", "and", ...). Stock tables, box
+# scores, mastheads and classified/legal notices run much lower, usually near 0-15%, because
+# they're mostly names and numbers. Calibrated against this corpus: every chunk below 0.15
+# checked by hand was junk, and real articles (even byline-heavy ones) sat at 0.22+.
+STOPWORDS = {
+    "the", "a", "an", "of", "to", "and", "in", "is", "for", "on", "that", "with", "as", "by", "at",
+    "was", "were", "it", "this", "are", "from", "said", "has", "have", "be", "not", "his", "her",
+    "their", "he", "she", "they", "but", "or", "its", "which", "we", "you", "i", "who", "will",
+    "would", "been", "had", "more", "than", "also", "one", "about", "after", "up", "out",
+}  # fmt: skip
+MIN_STOPWORD_RATIO = 0.15
+
+
+def is_boilerplate(text: str) -> bool:
+    words = re.findall(r"[a-zA-Z']+", text.lower())
+    if len(words) < 10:
+        return False  # too short for the ratio to mean anything; MIN_WORDS handles these
+    return sum(w in STOPWORDS for w in words) / len(words) < MIN_STOPWORD_RATIO
 
 
 def build_chunker() -> HybridChunker:
@@ -41,6 +61,8 @@ def chunk_paper(json_path: Path, paper: dict, chunker: HybridChunker) -> Iterato
         if all(item.label in SKIP_LABELS for item in items):
             continue
         if len(chunk.text.split()) < MIN_WORDS:
+            continue
+        if is_boilerplate(chunk.text):
             continue
 
         pages = sorted({prov.page_no for item in items for prov in item.prov})

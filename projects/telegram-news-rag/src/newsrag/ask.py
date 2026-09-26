@@ -23,7 +23,8 @@ from rich.markup import escape
 from rich.panel import Panel
 
 from newsrag.config import get_settings
-from newsrag.index.store import get_vector_store
+from newsrag.index.rerank import rerank
+from newsrag.index.store import get_embeddings, get_vector_store
 
 console = Console()
 
@@ -55,9 +56,31 @@ def build_filter(day: date | None, papers: list[str] | None) -> models.Filter | 
     return models.Filter(must=must) if must else None
 
 
-def retrieve(question: str, day: date | None, papers: list[str] | None, k: int) -> list[tuple[Document, float]]:
+def retrieve(
+    question: str,
+    day: date | None,
+    papers: list[str] | None,
+    k: int,
+    lambda_mult: float = 0.6,
+    pool_size: int = 25,
+    use_reranker: bool = True,
+) -> list[tuple[Document, float]]:
+    """Two-stage retrieval:
+
+    1. MMR over the embedding index fetches a `pool_size` candidate pool that balances
+       relevance against diversity (lambda_mult=1 is pure similarity, 0 is pure diversity).
+       Plain top-k similarity let one article's chunks fill most of the results.
+    2. A cross-encoder reranks that pool and keeps the best `k` - bi-encoder similarity
+       scores the query and each chunk independently (fast but coarse: our scores all sat
+       in a tight 0.49-0.54 band); a cross-encoder reads query and chunk together, which is
+       far more accurate, but too slow to run over the whole index.
+    """
     store = get_vector_store()
-    return store.similarity_search_with_score(question, k=k, filter=build_filter(day, papers))
+    embedding = get_embeddings().embed_query(question)
+    pool = store.max_marginal_relevance_search_with_score_by_vector(
+        embedding, k=pool_size, fetch_k=max(pool_size * 3, 40), lambda_mult=lambda_mult, filter=build_filter(day, papers)
+    )
+    return rerank(question, pool, k) if use_reranker else pool[:k]
 
 
 def source_label(doc: Document) -> str:
@@ -126,11 +149,11 @@ def render_answer(ans: Answer) -> None:
     console.print(f"[dim]{ans.model} · {ans.usage}[/dim]")
 
 
-def render_sources(hits: list[tuple[Document, float]], show_chunks: bool) -> None:
+def render_sources(hits: list[tuple[Document, float]], show_chunks: bool, score_label: str = "score") -> None:
     console.print("\n[bold]Retrieved chunks[/bold]")
     for n, (doc, score) in enumerate(hits, 1):
         ocr = " [dim](OCR)[/dim]" if doc.metadata.get("ocr") else ""
-        console.print(f"[cyan]\\[{n}][/cyan] {escape(source_label(doc))}{ocr}  [dim]score {score:.3f}[/dim]")
+        console.print(f"[cyan]\\[{n}][/cyan] {escape(source_label(doc))}{ocr}  [dim]{score_label} {score:.3f}[/dim]")
         body = doc.page_content if show_chunks else doc.page_content[:220].replace("\n", " ") + "…"
         console.print(f"    [dim]{escape(body)}[/dim]")
 
@@ -141,13 +164,20 @@ def main() -> None:
     parser.add_argument("--date", type=date.fromisoformat, help="Only this edition date (YYYY-MM-DD)")
     parser.add_argument("--paper", nargs="+", help="Only these publications, e.g. NYT 'FT US'")
     parser.add_argument("-k", type=int, default=8, help="How many chunks to retrieve (default 8)")
+    parser.add_argument(
+        "--lambda-mult", type=float, default=0.6, help="MMR pool: 1.0=pure relevance, 0.0=pure diversity (default 0.6)"
+    )
+    parser.add_argument("--pool-size", type=int, default=25, help="Candidates fetched before reranking (default 25)")
+    parser.add_argument("--no-rerank", action="store_true", help="Skip the cross-encoder reranker (plain MMR order)")
     parser.add_argument("--show-chunks", action="store_true", help="Print full text of retrieved chunks")
     parser.add_argument("--retrieve-only", action="store_true", help="Skip the LLM; only show retrieval")
     args = parser.parse_args()
     settings = get_settings()
 
     with console.status("Searching the papers..."):
-        hits = retrieve(args.question, args.date, args.paper, args.k)
+        hits = retrieve(
+            args.question, args.date, args.paper, args.k, args.lambda_mult, args.pool_size, not args.no_rerank
+        )
     if not hits:
         console.print("[yellow]No matching chunks. Is anything indexed for that date/paper?[/yellow]")
         return
@@ -161,7 +191,7 @@ def main() -> None:
                 ask = answer_with_ollama if settings.llm_provider == "ollama" else answer_with_claude
                 render_answer(ask(args.question, hits))
 
-    render_sources(hits, args.show_chunks)
+    render_sources(hits, args.show_chunks, score_label="relevance" if not args.no_rerank else "score")
 
 
 if __name__ == "__main__":

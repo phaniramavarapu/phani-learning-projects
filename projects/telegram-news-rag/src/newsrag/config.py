@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     anthropic_model: str = "claude-sonnet-5"
     anthropic_api_key: str = ""
     embed_model: str = "BAAI/bge-m3"
+    reranker_model: str = "BAAI/bge-reranker-v2-m3"
     chunk_max_tokens: int = 512
     qdrant_collection: str = "news"
 

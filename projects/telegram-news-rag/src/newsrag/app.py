@@ -47,6 +47,7 @@ with st.sidebar:
     day = st.selectbox("Edition", list(editions), format_func=lambda d: date.fromisoformat(d).strftime("%a %d %b %Y"))
     papers = st.multiselect("Papers", editions[day], default=editions[day])
     k = st.slider("Chunks to retrieve", 3, 20, 8)
+    use_reranker = st.toggle("Rerank (cross-encoder)", value=True, help="Re-scores a wider candidate pool for relevance; slower but much more precise than raw embedding similarity")
     show_pages = st.toggle("Show page images", value=False)
 
     model = settings.ollama_model if settings.llm_provider == "ollama" else settings.anthropic_model
@@ -55,12 +56,12 @@ with st.sidebar:
         st.session_state.messages = []
 
 
-def render_hits(hits: list[dict]) -> None:
+def render_hits(hits: list[dict], score_label: str = "score") -> None:
     with st.expander(f"Retrieved chunks ({len(hits)})"):
         for n, hit in enumerate(hits, 1):
             meta = hit["metadata"]
             ocr = " · OCR" if meta.get("ocr") else ""
-            st.markdown(f"**[{n}] {source_label_from(meta)}**{ocr} · score `{hit['score']:.3f}`")
+            st.markdown(f"**[{n}] {source_label_from(meta)}**{ocr} · {score_label} `{hit['score']:.3f}`")
             if show_pages and meta.get("page"):
                 st.image(page_image(meta["edition_date"], meta["file"], meta["page"]), width=320)
             st.text(hit["text"])
@@ -79,7 +80,7 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
         if msg.get("hits"):
-            render_hits(msg["hits"])
+            render_hits(msg["hits"], msg.get("score_label", "score"))
             st.caption(msg["footer"])
 
 if question := st.chat_input("Ask about the papers…"):
@@ -89,7 +90,7 @@ if question := st.chat_input("Ask about the papers…"):
 
     with st.chat_message("assistant"):
         with st.spinner("Searching the papers…"):
-            hits = retrieve(question, date.fromisoformat(day), papers or None, k)
+            hits = retrieve(question, date.fromisoformat(day), papers or None, k, use_reranker=use_reranker)
         if not hits:
             st.warning("No matching chunks for these filters.")
             st.stop()
@@ -103,8 +104,11 @@ if question := st.chat_input("Ask about the papers…"):
             content, footer = ans.text, f"{ans.model} · {ans.usage}"
 
         stored_hits = [{"text": d.page_content, "metadata": d.metadata, "score": s} for d, s in hits]
+        score_label = "relevance" if use_reranker else "score"
         st.markdown(content)
-        render_hits(stored_hits)
+        render_hits(stored_hits, score_label)
         st.caption(footer)
 
-    st.session_state.messages.append({"role": "assistant", "content": content, "hits": stored_hits, "footer": footer})
+    st.session_state.messages.append(
+        {"role": "assistant", "content": content, "hits": stored_hits, "footer": footer, "score_label": score_label}
+    )
